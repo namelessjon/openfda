@@ -93,6 +93,35 @@ reacts <- results[seq(2, length(results), 3)] %>% bind_rows()
 drugs  <- results[seq(1, length(results), 3)] %>% bind_rows()
 reports <- results[seq(3, length(results), 3)] %>% bind_rows()
 
+# tidy up the data a little
+reports <- reports %>% mutate(
+  primarysource = as.factor(primarysource),
+  patientageunit = as.factor(patientageunit),
+  patientsex     = as.factor(patientsex),
+  transmission_date = parse_date(transmission_date, "%Y%m%d"),
+  receipt_date      = parse_date(receipt_date, "%Y%m%d")
+  ) %>% mutate(
+  primarysource = fct_recode(primarysource,
+                                        "Physician" = "1",
+                                        "Pharmacist" = "2",
+                                        "Other health professional" = "3",
+                                        "Lawyer" = "4",
+                                        "Consumer or non-health professional" = "5"
+                             ) %>% fct_explicit_na("Unknown"),
+  patientageunit = fct_recode(patientageunit,
+                              "Decade" = "800",
+                              "Year"= "801",
+                              "Month" = "802",
+                              "Week" = "803",
+                              "Day" = "804",
+                              "Hour" = "805"),
+  patientsex = fct_recode(patientsex,
+                          "Unknown" = "0",
+                          "Male" = "1",
+                          "Female" = "2") %>% fct_explicit_na("Unknown")
+  )
+
+
 dir.create('data/fda/raw', showWarnings = F, recursive = T, mode = "0755")
 
 write_csv(reports, 'data/fda/raw/2015_reports.csv')
