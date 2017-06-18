@@ -8,6 +8,8 @@
 library(httr)
 library(readr)
 library(purrr)
+library(tibble)
+library(dplyr)
 
 source('api_key.R')
 
