@@ -1,0 +1,163 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r requirements, include=F}
+library(readr)
+library(dplyr)
+library(tidyr)
+library(forcats)
+library(ggplot2)
+```
+
+Data were extracted from the [OpenFDA adverse events](https://open.fda.gov/drug/event/) using `fetch_2015.R`. This extracts a subset of the data which was recieved in 2015.
+
+```{r read_data}
+reports <- read_csv('data/fda/raw/2015_reports.csv', col_types = cols(
+  reportid = col_character(),
+  primarysource = col_factor(levels = c("Physician", "Pharmacist","Other health professional", "Lawyer", "Consumer or non-health professional", "Unknown")),
+  patientage = col_integer(),
+  patientageunit = col_factor(levels = c("Decade", "Year", "Month", "Week", "Day", "Hour")),
+  patientsex = col_factor(c("Unknown", "Male", "Female")),
+  country = col_factor(levels = NULL),
+  transmission_date = col_date("%Y-%m-%d"),
+  receipt_date = col_date("%Y-%m-%d")
+)
+)
+  
+drugs   <- read_csv('data/fda/raw/2015_drugs.csv', col_types = cols(
+  reportid = col_character(),
+  Drug = col_character(),
+  Indication = col_character()
+))
+reacts  <- read_csv('data/fda/raw/2015_reacts.csv', col_types = cols(
+  reportid = col_character(),
+  React = col_character()
+))
+```
+
+There are `r nrow(reports)` in the dataset, which represents `r reacts %>% select(React) %>% unique %>% nrow()` types of adverse event, from `r drugs %>% select(Drug) %>% unique %>% nrow()` drugs.
+
+
+```{r reports_by_gender}
+reports %>% count(patientsex) %>% arrange(-n) %>% ggplot(aes(x = patientsex, y = n)) +
+  geom_point() + labs(y = "# of reports", x = "Patient Sex") 
+```
+
+Almost twice as many adverse event reports are concerning women.
+
+## Adverse Events distribution
+
+Top 10 adverse events per report
+
+```{r top10_adverse_events}
+reaction_counts <- reacts %>% unique() %>% count(React) %>% arrange(-n)
+reaction_counts %>% head(10)
+```
+
+
+
+```{r reactions_per_report}
+reports %>% left_join(reacts %>% unique %>% count(reportid)) %>% ggplot(aes(x = n, colour = patientsex)) + geom_freqpoly(bins = 50) + labs(x = "Number of events per report", title = "Distribution of number of adverse events on one report")
+```
+
+
+## drugs distribution
+
+Top 10 drugs per report, treating multiple occurences on one report as 1 appearance
+
+```{r top10_drugs_events}
+drugs %>% select(reportid, Drug) %>% unique() %>% count(Drug) %>% arrange(-n) %>% head(10)
+```
+
+```{r drug_per_report}
+reports %>% left_join(drugs %>% select(reportid,Drug) %>% unique %>% count(reportid)) %>% ggplot(aes(x = n, colour = patientsex)) + geom_freqpoly(bins = 50) + labs(x = "Number of drugs per report", title = "Distribution of number of drugs on one report")
+```
+
+The vast bulk of reports have one or two drugs involved.
+
+There's no obvious relationship between number of reported reactions and the number of drugs taken
+
+```{r reacts_and_drugs}
+reports %>%
+  left_join(reacts %>% unique %>% count(reportid) %>% rename(nreacts = n)) %>%
+  left_join(drugs %>% select(reportid,Drug) %>% unique %>% count(reportid) %>% rename(ndrugs = n)) -> annotated_reports
+
+ggplot(annotated_reports, aes(x = ndrugs, y = nreacts)) + geom_jitter(alpha = 0.1)
+```
+
+
+## By Age
+
+Distribution of reports by patient age
+
+```{r by_age}
+reports %>% filter(patientageunit == 'Year', !is.na(patientage)) %>% count(patientage) %>% ggplot(aes(x = patientage, y = n)) + geom_point()
+```
+
+
+
+# Differences by country
+
+There's a big bias in the data toward the US, with almost 2/3 of the events coming from there, so any comparator should be normalized by the number of reports per country.
+
+```{r reports_per_country}
+reports_per_country <- reports %>% count(country) %>% arrange(-n)
+reports_per_country %>% head(10)
+```
+
+Can we see any difference in the types of reports by country?
+
+```{r prepare_reports}
+common_reactions <- reaction_counts %>%
+  filter(n >= nrow(reports)*0.001) %>% # reactions that occur in at least 1% of reports
+  semi_join(reacts, ., by = 'React') # select only those reactions
+
+reports_with_reactions <- reports %>%
+  inner_join(common_reactions %>% unique(), by = 'reportid')
+
+reports_per_country_subset <- reports_with_reactions %>% count(country) %>% rename(n_per_country = n)
+
+# construct the report signature for each country
+report_signature <- reports_with_reactions %>%
+  select(reportid, country, React) %>%
+  left_join(reports_per_country_subset, by = 'country') %>%
+  filter(n_per_country >= 250) %>% # pick only countries with at least 100 reports
+  mutate(value = 1) %>%
+  spread(React, value, fill = 0) %>%
+  select(-reportid, -n_per_country) %>%
+  group_by(country) %>%
+  summarise_all(sum) %>%
+  left_join(reports_per_country_subset, by = 'country') %>%
+  mutate_if(is.double, funs(. / n_per_country)) %>%
+  select(-n_per_country) 
+```
+
+```{r clustering}
+
+report_matrix <- report_signature %>% select(-country) %>% as.matrix() 
+rownames(report_matrix) <- report_signature %>% select(country) %>% unlist()
+
+d <- dist(report_matrix, d = 'can')
+
+hc <- hclust(d, method ='ward.D')
+plot(hc)
+nGroup <- 5
+groups <- cutree(hc, k=nGroup) # cut tree into 5 clusters
+rect.hclust(hc, k=nGroup, border="red")
+```
+
+```{r clustering2}
+
+report_matrix <- report_signature %>% select(-country) %>% as.matrix() 
+rownames(report_matrix) <- report_signature %>% select(country) %>% unlist()
+
+d <- dist(report_matrix, d = 'can')
+
+hc <- hclust(d, method ='ward.D')
+plot(hc)
+nGroup <- 10
+groups <- cutree(hc, k=nGroup) # cut tree into 5 clusters
+rect.hclust(hc, k=nGroup, border="red")
+```
