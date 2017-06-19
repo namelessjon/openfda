@@ -5,10 +5,12 @@ output: html_notebook
 
 ```{r requirements, include=F}
 library(readr)
+library(tibble)
 library(dplyr)
 library(tidyr)
 library(forcats)
 library(ggplot2)
+library(scales)
 ```
 
 Data were extracted from the [OpenFDA adverse events](https://open.fda.gov/drug/event/) using `fetch_2015.R`. This extracts a subset of the data which was recieved in 2015.
@@ -16,14 +18,16 @@ Data were extracted from the [OpenFDA adverse events](https://open.fda.gov/drug/
 ```{r read_data}
 reports <- read_csv('data/fda/raw/2015_reports.csv', col_types = cols(
   reportid = col_character(),
-  primarysource = col_factor(levels = c("Physician", "Pharmacist","Other health professional", "Lawyer", "Consumer or non-health professional", "Unknown")),
+  primarysource = readr::col_factor(levels = c("Physician", "Pharmacist","Other health professional", "Lawyer", "Consumer or non-health professional", "Unknown")),
   patientage = col_integer(),
-  patientageunit = col_factor(levels = c("Decade", "Year", "Month", "Week", "Day", "Hour")),
-  patientsex = col_factor(c("Unknown", "Male", "Female")),
-  country = col_factor(levels = NULL),
+  patientageunit = readr::col_factor(levels = c("Decade", "Year", "Month", "Week", "Day", "Hour")),
+  patientsex = readr::col_factor(c("Unknown", "Male", "Female")),
+  country = readr::col_factor(levels = NULL),
   transmission_date = col_date("%Y-%m-%d"),
   receipt_date = col_date("%Y-%m-%d")
 )
+) %>% mutate(
+  country = fct_infreq(country)
 )
   
 drugs   <- read_csv('data/fda/raw/2015_drugs.csv', col_types = cols(
@@ -46,6 +50,43 @@ reports %>% count(patientsex) %>% arrange(-n) %>% ggplot(aes(x = patientsex, y =
 ```
 
 Almost twice as many adverse event reports are concerning women.
+
+## Differences by country
+
+There's a big bias in the data toward the US, with almost 2/3 of the events coming from there, so any comparator should be normalized by the number of reports per country.
+
+```{r reports_per_country}
+reports_per_country <- reports %>% count(country) %>% arrange(-n)
+reports_per_country %>% head(10)
+```
+
+
+```{r primary_source}
+reports %>% ggplot(aes(x = primarysource)) + geom_bar() + labs(x = 'Reporter of AE', y = 'count') + scale_y_continuous(labels = comma) + theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0)) +
+   scale_x_discrete(labels = function(x) stringr::str_wrap(x, width = 15))
+```
+
+
+Most events are reported by the consumer themselves, followed by physians and then other healthcare professionsals.  Could be interesting to look at this over time and see how that changed (if at all).  Very few lawyers are involved in the process it seems. 
+
+```{r primary_source_by_country, fig.width=8}
+# do this long-hand as there doesn't seem to be a nice ggplot option to scale the output weel
+country_subset <- reports %>%
+  mutate(country = fct_lump(country, n = 11)) %>%
+  filter(!is.na(country)) # this only represents 168 events
+
+events_per_country <- country_subset %>% group_by(country) %>% count() %>% rename(total_per_country = n)
+
+country_subset %>%
+  group_by(country, primarysource) %>%
+  count() %>%
+  left_join(events_per_country, by = 'country') %>%
+  mutate(n = n/total_per_country) %>%
+  ggplot(aes(x = primarysource, y = n*100)) + geom_bar(stat= 'identity') + labs(x = 'Reporter of AE', y = '% from source') + scale_y_continuous(labels = comma) + theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0)) +
+   scale_x_discrete(labels = function(x) stringr::str_wrap(x, width = 20)) + facet_wrap(~country)
+```
+
+Unsuprisingly, the US shows the same shape as the overall picture.  The already very rare laywers don't seem to feature at all in reports outside the US. Canada has a similar picture to the US, though more balanced between Health professionals and consumer reports.  Brazil is skewed the other way, with most reports coming from non-health professionals.  Japan and Germany show a relatively strong lean toward physicians. Generally the rest of the world seems to have a lean toward events being reported from healthcare professionals -- is this a reflection of how things are reported, or are healthcare professional reports more likely to be cascaded to the FDA?
 
 ## Adverse Events distribution
 
@@ -98,20 +139,13 @@ reports %>% filter(patientageunit == 'Year', !is.na(patientage)) %>% count(patie
 
 
 
-# Differences by country
 
-There's a big bias in the data toward the US, with almost 2/3 of the events coming from there, so any comparator should be normalized by the number of reports per country.
-
-```{r reports_per_country}
-reports_per_country <- reports %>% count(country) %>% arrange(-n)
-reports_per_country %>% head(10)
-```
 
 Can we see any difference in the types of reports by country?
 
 ```{r prepare_reports}
 common_reactions <- reaction_counts %>%
-  filter(n >= nrow(reports)*0.001) %>% # reactions that occur in at least 1% of reports
+  filter(n >= nrow(reports)*0.001) %>% # reactions that occur in at least 0.1% of reports
   semi_join(reacts, ., by = 'React') # select only those reactions
 
 reports_with_reactions <- reports %>%
@@ -123,7 +157,7 @@ reports_per_country_subset <- reports_with_reactions %>% count(country) %>% rena
 report_signature <- reports_with_reactions %>%
   select(reportid, country, React) %>%
   left_join(reports_per_country_subset, by = 'country') %>%
-  filter(n_per_country >= 250) %>% # pick only countries with at least 100 reports
+  filter(n_per_country >= 500) %>% # pick only countries with at least 500 reports
   mutate(value = 1) %>%
   spread(React, value, fill = 0) %>%
   select(-reportid, -n_per_country) %>%
@@ -146,6 +180,16 @@ plot(hc)
 nGroup <- 5
 groups <- cutree(hc, k=nGroup) # cut tree into 5 clusters
 rect.hclust(hc, k=nGroup, border="red")
+```
+
+```{r cluster_mds}
+md <- cmdscale(d) %>%
+  as.data.frame() %>%
+  rownames_to_column(var = 'country') %>%
+  mutate(group = groups)
+
+ggplot(md, aes(x = V1, y = V2, colour = as.factor(group))) + geom_point() + geom_text(aes(label = country), hjust = 0.1, vjust = 0.1) + scale_color_brewer(palette = 'Dark2') + theme_bw() + labs(x = '', y = '', colour = 'Cluster', title = "MDS plot of the countries clustered on, coloured by group")
+
 ```
 
 ```{r clustering2}
