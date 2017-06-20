@@ -1,9 +1,12 @@
 ---
-title: "R Notebook"
+title: "Comparing adverse events between countries by exploring the OpenFDA data"
+author: "Jonathan Stott"
 output: html_notebook
 ---
 
-```{r requirements, include=F}
+This document starts with some exploration of the data, then looks into the country question in more detail...
+
+```{r requirements, include=F, message=F, warning=F}
 library(readr)
 library(tibble)
 library(dplyr)
@@ -138,14 +141,17 @@ reports %>% filter(patientageunit == 'Year', !is.na(patientage)) %>% count(patie
 ```
 
 
+# Differences per country deeper dive
 
+Can we pick up on any differences on a country level in the types of events reported?
 
+## Hierachical Clustering
 
-Can we see any difference in the types of reports by country?
+Try to arrange the countries into groups based on their 'adverse event signature', which are the proportions of their adverse event reports which mention a particular common (occurs in >=1% of all reports) adverse event.  Only countries with at least 500 individual reports are considered.
 
 ```{r prepare_reports}
 common_reactions <- reaction_counts %>%
-  filter(n >= nrow(reports)*0.001) %>% # reactions that occur in at least 0.1% of reports
+  filter(n >= nrow(reports)*0.01) %>% # reactions that occur in at least 1% of reports
   semi_join(reacts, ., by = 'React') # select only those reactions
 
 reports_with_reactions <- reports %>%
@@ -168,6 +174,8 @@ report_signature <- reports_with_reactions %>%
   select(-n_per_country) 
 ```
 
+Use the canberra distance metric, as we're dealing with (normalised) counts.  Use the clustering method due to Ward to cluster together to try and get small clusters.
+
 ```{r clustering}
 
 report_matrix <- report_signature %>% select(-country) %>% as.matrix() 
@@ -177,7 +185,7 @@ d <- dist(report_matrix, d = 'can')
 
 hc <- hclust(d, method ='ward.D')
 plot(hc)
-nGroup <- 5
+nGroup <- 4
 groups <- cutree(hc, k=nGroup) # cut tree into 5 clusters
 rect.hclust(hc, k=nGroup, border="red")
 ```
@@ -192,16 +200,23 @@ ggplot(md, aes(x = V1, y = V2, colour = as.factor(group))) + geom_point() + geom
 
 ```
 
-```{r clustering2}
+## PCA
 
-report_matrix <- report_signature %>% select(-country) %>% as.matrix() 
-rownames(report_matrix) <- report_signature %>% select(country) %>% unlist()
+To try and understand some of the clustering, try PCA to see how the report signature is distributed over the countries.
 
-d <- dist(report_matrix, d = 'can')
-
-hc <- hclust(d, method ='ward.D')
-plot(hc)
-nGroup <- 10
-groups <- cutree(hc, k=nGroup) # cut tree into 5 clusters
-rect.hclust(hc, k=nGroup, border="red")
+```{r pca}
+pca <- prcomp(report_matrix, center = T, scale. = T)
+plot(pca, main = "Variances captured in the first 10 PCA components")
 ```
+
+### Biplot
+
+```{r biplot1, fig.width=8, fig.height=8}
+biplot(pca)
+```
+
+Biplot suggests that IN, NL (and perhaps CN) share a cluster (3) in the hierachical clustering due to an increased proportion of reported deaths.  Cluster 2, with Italy and France, seems to be driven by a lot of gastrointenstinal events such as vomiting nad diarrhoea.  The largest cluster, 1, which includes the US seems to have a diversity of events reported.  From the biplot, it's not clear why Pueto Rico (PR) is clustered on its own (or from the denogram, with France, Italy et al), though the PCA wasn't used for clustering.
+
+## Conclusions
+
+This initial analysis points at differences in both who reports, and what events, are reported to the FDA between countries.  There's obviously a very large bias in the data set toward the US.  It's not clear if there's a reporting bias, with only more serious overseas events making their way back to the FDA.  It would be interesting to compare this to similar data from the UK (or other national health agencies).
