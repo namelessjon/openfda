@@ -46,10 +46,10 @@ There are `r nrow(reports)` in the dataset, which represents `r reacts %>% selec
 
 ```{r reports_by_gender}
 reports %>% count(patientsex) %>% arrange(-n) %>% ggplot(aes(x = patientsex, y = n)) +
-  geom_point() + labs(y = "# of reports", x = "Patient Sex") 
+  geom_point() + labs(y = "# of reports", x = "Patient Sex") + expand_limits(y = 0)
 ```
 
-Almost twice as many adverse event reports are concerning women.
+Almost 50% again as many adverse event reports are concerning women. Though unknown + male would be about the same - implicit bias in reporting?
 
 ## Differences by country
 
